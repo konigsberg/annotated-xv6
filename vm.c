@@ -133,18 +133,21 @@ setupkvm(void)
   pde_t *pgdir;
   struct kmap *k;
 
-  if((pgdir = (pde_t*)kalloc()) == 0)
+  /// First allocate a page of memory to hold the page directory
+  if((pgdir = (pde_t*)kalloc()) == 0) /// failed to alloc
     return 0;
   memset(pgdir, 0, PGSIZE);
-  if (P2V(PHYSTOP) > (void*)DEVSPACE)
+  if (P2V(PHYSTOP) > (void*)DEVSPACE) /// this area is for device memory?
     panic("PHYSTOP too high");
+  /// &kmap[NELEM(kmap)] is the address of last element in kmap array, which has 4 elements
+  /// install the translations that kernel needs
   for(k = kmap; k < &kmap[NELEM(kmap)]; k++)
     if(mappages(pgdir, k->virt, k->phys_end - k->phys_start,
-                (uint)k->phys_start, k->perm) < 0) {
+                (uint)k->phys_start, k->perm) < 0) { /// no such page entry
       freevm(pgdir);
       return 0;
     }
-  return pgdir;
+  return pgdir; /// return the mapped page directory entry (aka page tabke)
 }
 
 // Allocate one page table for the machine for the kernel address
