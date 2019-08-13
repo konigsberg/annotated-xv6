@@ -32,16 +32,24 @@ seginit(void)
 // Return the address of the PTE in page table pgdir
 // that corresponds to virtual address va.  If alloc!=0,
 // create any required page table pages.
+/// the page directory and the page table are organized by parts of the virtual address.
+/// the higher 10 bits of virtual address specifies the index of page directory,
+/// the middle 10 bits specifies the index of page table, and the rest 12 bits indicates the
+/// bytes offset. The offsets is identical in both virtual and physical addresses.
 static pte_t *
 walkpgdir(pde_t *pgdir, const void *va, int alloc)
 {
-  pde_t *pde;
+  pde_t *pde; // page directory entry
   pte_t *pgtab;
 
+  /// find the page directory entry in the page directory table using higher 10 bits of va
   pde = &pgdir[PDX(va)];
-  if(*pde & PTE_P){
+  /// the page directory entry exists and the flag is PTE_P (present)
+  if(*pde & PTE_P){ 
+    /// return the corresponding page table at page directory entry
     pgtab = (pte_t*)P2V(PTE_ADDR(*pde));
   } else {
+    /// no need to allocate or failed to allocate
     if(!alloc || (pgtab = (pte_t*)kalloc()) == 0)
       return 0;
     // Make sure all those PTE_P bits are zero.
@@ -63,14 +71,18 @@ mappages(pde_t *pgdir, void *va, uint size, uint pa, int perm)
   char *a, *last;
   pte_t *pte;
 
+  /// we should map several pages to several physical frames.
+  /// a is the address of first page, and last is the address of last page
   a = (char*)PGROUNDDOWN((uint)va);
   last = (char*)PGROUNDDOWN(((uint)va) + size - 1);
   for(;;){
-    if((pte = walkpgdir(pgdir, a, 1)) == 0)
+    if((pte = walkpgdir(pgdir, a, 1)) == 0) // page not present
       return -1;
-    if(*pte & PTE_P)
+    if(*pte & PTE_P) /// already been mapped
       panic("remap");
-    *pte = pa | perm | PTE_P;
+    /// we still map the first page to pa even if pa is not page-aligned, or it's ensured
+    /// that pa is page-aligned?
+    *pte = pa | perm | PTE_P; 
     if(a == last)
       break;
     a += PGSIZE;

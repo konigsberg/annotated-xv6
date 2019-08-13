@@ -71,15 +71,19 @@ struct segdesc {
 //  \--- PDX(va) --/ \--- PTX(va) --/
 
 // page directory index
+/// the higher ten bits of va, PDXSHIFT is 22
 #define PDX(va)         (((uint)(va) >> PDXSHIFT) & 0x3FF)
 
 // page table index
+/// the afterwards ten bits of va, PTXSHIFT is 12
 #define PTX(va)         (((uint)(va) >> PTXSHIFT) & 0x3FF)
 
-// construct virtual address from indexes and offset
+// construct virtual address from indices and offset
+/// d is the PDX index, d is the PDX index, o is the PTE offset
 #define PGADDR(d, t, o) ((uint)((d) << PDXSHIFT | (t) << PTXSHIFT | (o)))
 
 // Page directory and page table constants.
+
 #define NPDENTRIES      1024    // # directory entries per page directory
 #define NPTENTRIES      1024    // # PTEs per page table
 #define PGSIZE          4096    // bytes mapped by a page
@@ -97,12 +101,15 @@ struct segdesc {
 #define PTE_PS          0x080   // Page Size
 
 // Address in page table or page directory entry
+/// the higher 20 bits 
 #define PTE_ADDR(pte)   ((uint)(pte) & ~0xFFF)
+/// the lower 10 bits
 #define PTE_FLAGS(pte)  ((uint)(pte) &  0xFFF)
 
 #ifndef __ASSEMBLER__
 typedef uint pte_t;
 
+/// before process switching, all the registers of current process are saved to this struct
 // Task state segment format
 struct taskstate {
   uint link;         // Old ts selector
@@ -167,7 +174,7 @@ struct gatedesc {
 //        this interrupt/trap gate explicitly using an int instruction.
 #define SETGATE(gate, istrap, sel, off, d)                \
 {                                                         \
-  (gate).off_15_0 = (uint)(off) & 0xffff;                \
+  (gate).off_15_0 = (uint)(off) & 0xffff;                 \
   (gate).cs = (sel);                                      \
   (gate).args = 0;                                        \
   (gate).rsv1 = 0;                                        \
@@ -175,7 +182,7 @@ struct gatedesc {
   (gate).s = 0;                                           \
   (gate).dpl = (d);                                       \
   (gate).p = 1;                                           \
-  (gate).off_31_16 = (uint)(off) >> 16;                  \
+  (gate).off_31_16 = (uint)(off) >> 16;                   \
 }
 
 #endif
