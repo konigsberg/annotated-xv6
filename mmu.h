@@ -103,7 +103,7 @@ struct segdesc {
 // Address in page table or page directory entry
 /// the higher 20 bits 
 #define PTE_ADDR(pte)   ((uint)(pte) & ~0xFFF)
-/// the lower 10 bits
+/// the lower 12 bits
 #define PTE_FLAGS(pte)  ((uint)(pte) &  0xFFF)
 
 #ifndef __ASSEMBLER__

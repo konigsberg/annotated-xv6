@@ -43,8 +43,8 @@ walkpgdir(pde_t *pgdir, const void *va, int alloc)
   pte_t *pgtab;
 
   /// find the page directory entry in the page directory table using higher 10 bits of va
-  pde = &pgdir[PDX(va)];
-  /// the page directory entry exists and the flag is PTE_P (present)
+  pde = &pgdir[PDX(va)]; /// pde = pgdir + PDX(va)
+  /// the flag of pde contains PTE_P (present)
   if(*pde & PTE_P){ 
     /// return the corresponding page table at page directory entry
     pgtab = (pte_t*)P2V(PTE_ADDR(*pde));
@@ -134,10 +134,10 @@ setupkvm(void)
   struct kmap *k;
 
   /// First allocate a page of memory to hold the page directory
-  if((pgdir = (pde_t*)kalloc()) == 0) /// failed to alloc
+  if((pgdir = (pde_t*)kalloc()) == 0)
     return 0;
   memset(pgdir, 0, PGSIZE);
-  if (P2V(PHYSTOP) > (void*)DEVSPACE) /// this area is for device memory?
+  if (P2V(PHYSTOP) > (void*)DEVSPACE)
     panic("PHYSTOP too high");
   /// &kmap[NELEM(kmap)] is the address of last element in kmap array, which has 4 elements
   /// install the translations that kernel needs
