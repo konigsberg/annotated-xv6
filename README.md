@@ -330,8 +330,6 @@ deallocuvm(pde_t *pgdir, uint oldsz, uint newsz)
 deallocuvm与allocuvm的作用相反，是将进程的内存空间上限从oldsz降低到newsz。从newsz上面一个对齐页开始，到oldsz上面一个对齐页结束，首先找到每一页的page table entry，拿到物理地址pa，然后释放掉物理页加入到freelist中去，并且把page table entry清零。
 
 ```c
- // Free a page table and all the physical memory pages
-// in the user part.
 void
 freevm(pde_t *pgdir)
 {
@@ -445,4 +443,195 @@ copyout(pde_t *pgdir, uint va, void *p, uint len)
 ```
 
 copyout将从物理地址p开始的len个字节拷贝到虚拟地址va，pgdir是某一个进程的page directory。va和p都不一定是页对齐的。va是用户的虚拟地址，但memmove需要的是内核的虚拟地址，因此L11首先找到包含va地址的用户页的首地址，然后L12找到内核页访问这个地址的虚拟地址，注意pa0是内核的虚拟地址。L18中memmove的目标地址是va对应的内核虚拟地址。
+
+### Traps, interrupts, and drivers
+
+需要看的几个源码文件：`trap.c`，`syscall.c`，`lapic.c`，`ide.c`。
+
+```c
+// Gate descriptors for interrupts and traps
+struct gatedesc {
+  uint off_15_0 : 16;   // low 16 bits of offset in segment
+  uint cs : 16;         // code segment selector
+  uint args : 5;        // # args, 0 for interrupt/trap gates
+  uint rsv1 : 3;        // reserved(should be zero I guess)
+  uint type : 4;        // type(STS_{IG32,TG32})
+  uint s : 1;           // must be 0 (system)
+  uint dpl : 2;         // descriptor(meaning new) privilege level
+  uint p : 1;           // Present
+  uint off_31_16 : 16;  // high bits of offset in segment
+};
+```
+
+这里的结构体用了bit field（位域）的写法，冒号后面的数字表示这个字段占了多少位。
+
+```c
+// Set up a normal interrupt/trap gate descriptor.
+// - istrap: 1 for a trap (= exception) gate, 0 for an interrupt gate.
+//   interrupt gate clears FL_IF, trap gate leaves FL_IF alone
+// - sel: Code segment selector for interrupt/trap handler
+// - off: Offset in code segment for interrupt/trap handler
+// - dpl: Descriptor Privilege Level -
+//        the privilege level required for software to invoke
+//        this interrupt/trap gate explicitly using an int instruction.
+#define SETGATE(gate, istrap, sel, off, d)                \
+{                                                         \
+  (gate).off_15_0 = (uint)(off) & 0xffff;                 \
+  (gate).cs = (sel);                                      \
+  (gate).args = 0;                                        \
+  (gate).rsv1 = 0;                                        \
+  (gate).type = (istrap) ? STS_TG32 : STS_IG32;           \
+  (gate).s = 0;                                           \
+  (gate).dpl = (d);                                       \
+  (gate).p = 1;                                           \
+  (gate).off_31_16 = (uint)(off) >> 16;                   \
+}
+```
+
+SETGATE宏提供了一种设置gate的相应字段的方法。我觉得s字段和off字段应当是interrupt/trap handler函数的地址。
+
+```c
+struct gatedesc idt[256];
+extern uint vectors[];  // in vectors.S: array of 256 entry pointers
+struct spinlock tickslock;
+uint ticks;
+void
+tvinit(void)
+{
+  int i;
+  for(i = 0; i < 256; i++)
+    SETGATE(idt[i], 0, SEG_KCODE<<3, vectors[i], 0);
+  SETGATE(idt[T_SYSCALL], 1, SEG_KCODE<<3, vectors[T_SYSCALL], DPL_USER);
+  initlock(&tickslock, "time");
+}
+```
+
+vectors设置了256个interrupt handler的code offset，由于是内核代码因此selector是SEG_KCODE，privilege是0，istrap是0。但是有一个特殊的interrupt叫做system call，它的privilege是DPL_USER级别的，因为这是用户代码唯一触发中断的方式。
+
+```c
+struct trapframe {
+  // registers as pushed by pusha
+  uint edi;
+  uint esi;
+  uint ebp;
+  uint oesp;      // useless & ignored
+  uint ebx;
+  uint edx;
+  uint ecx;
+  uint eax;
+
+  // rest of trap frame
+  ushort gs;
+  ushort padding1;
+  ushort fs;
+  ushort padding2;
+  ushort es;
+  ushort padding3;
+  ushort ds;
+  ushort padding4;
+  uint trapno;
+
+  // below here defined by x86 hardware
+  uint err;
+  uint eip;
+  ushort cs;
+  ushort padding5;
+  uint eflags;
+
+  // below here only when crossing rings, such as from user to kernel
+  uint esp;
+  ushort ss;
+  ushort padding6;
+};
+```
+
+
+
+
+
+
+
+
+
+
+
+```c
+void
+trap(struct trapframe *tf)
+{
+  if(tf->trapno == T_SYSCALL){
+    if(myproc()->killed)
+      exit();
+    myproc()->tf = tf;
+    syscall();
+    if(myproc()->killed)
+      exit();
+    return;
+  }
+
+  switch(tf->trapno){
+  case T_IRQ0 + IRQ_TIMER:
+    if(cpuid() == 0){
+      acquire(&tickslock);
+      ticks++;
+      wakeup(&ticks);
+      release(&tickslock);
+    }
+    lapiceoi();
+    break;
+  case T_IRQ0 + IRQ_IDE:
+    ideintr();
+    lapiceoi();
+    break;
+  case T_IRQ0 + IRQ_IDE+1:
+    // Bochs generates spurious IDE1 interrupts.
+    break;
+  case T_IRQ0 + IRQ_KBD:
+    kbdintr();
+    lapiceoi();
+    break;
+  case T_IRQ0 + IRQ_COM1:
+    uartintr();
+    lapiceoi();
+    break;
+  case T_IRQ0 + 7:
+  case T_IRQ0 + IRQ_SPURIOUS:
+    cprintf("cpu%d: spurious interrupt at %x:%x\n",
+            cpuid(), tf->cs, tf->eip);
+    lapiceoi();
+    break;
+
+  //PAGEBREAK: 13
+  default:
+    if(myproc() == 0 || (tf->cs&3) == 0){
+      // In kernel, it must be our mistake.
+      cprintf("unexpected trap %d from cpu %d eip %x (cr2=0x%x)\n",
+              tf->trapno, cpuid(), tf->eip, rcr2());
+      panic("trap");
+    }
+    // In user space, assume process misbehaved.
+    cprintf("pid %d %s: trap %d err %d on cpu %d "
+            "eip 0x%x addr 0x%x--kill proc\n",
+            myproc()->pid, myproc()->name, tf->trapno,
+            tf->err, cpuid(), tf->eip, rcr2());
+    myproc()->killed = 1;
+  }
+
+  // Force process exit if it has been killed and is in user space.
+  // (If it is still executing in the kernel, let it keep running
+  // until it gets to the regular system call return.)
+  if(myproc() && myproc()->killed && (tf->cs&3) == DPL_USER)
+    exit();
+
+  // Force process to give up CPU on clock tick.
+  // If interrupts were on while locks held, would need to check nlock.
+  if(myproc() && myproc()->state == RUNNING &&
+     tf->trapno == T_IRQ0+IRQ_TIMER)
+    yield();
+
+  // Check if the process has been killed since we yielded
+  if(myproc() && myproc()->killed && (tf->cs&3) == DPL_USER)
+    exit();
+}
+```
 
